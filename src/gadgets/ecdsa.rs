@@ -15,6 +15,7 @@ use crate::gadgets::curve_windowed_mul::CircuitBuilderWindowedMul;
 use crate::gadgets::glv::CircuitBuilderGlv;
 use crate::gadgets::nonnative::{CircuitBuilderNonNative, NonNativeTarget};
 
+
 #[derive(Clone, Debug)]
 pub struct ECDSASecretKeyTarget<C: Curve>(pub NonNativeTarget<C::ScalarField>);
 
@@ -84,9 +85,8 @@ mod tests {
     use plonky2::iop::witness::PartialWitness;
     use plonky2::plonk::circuit_data::CircuitConfig;
     use plonky2::plonk::config::{GenericConfig, PoseidonGoldilocksConfig};
-
+    use crate::curve::curve_types::{Curve, CurveScalar};
     use super::*;
-    use crate::curve::curve_types::CurveScalar;
     use crate::curve::ecdsa::{sign_message, ECDSAPublicKey, ECDSASecretKey, ECDSASignature};
 
     fn test_ecdsa_circuit_with_config(config: CircuitConfig) -> Result<()> {
@@ -162,25 +162,20 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_ecdsa_circuit_narrow() -> Result<()> {
         test_ecdsa_circuit_with_config(CircuitConfig::standard_ecc_config())
     }
 
     #[test]
-    #[ignore]
     fn test_ecdsa_circuit_wide() -> Result<()> {
         test_ecdsa_circuit_with_config(CircuitConfig::wide_ecc_config())
     }
 
-    #[test]
-    #[ignore]
-    fn test_p256_ecdsa_circuit_narrow() -> Result<()> {
+    #[test]    fn test_p256_ecdsa_circuit_narrow() -> Result<()> {
         test_p256_ecdsa_circuit_with_config(CircuitConfig::standard_ecc_config())
     }
 
     #[test]
-    #[ignore]
     fn test_p256_ecdsa_circuit_wide() -> Result<()> {
         test_p256_ecdsa_circuit_with_config(CircuitConfig::wide_ecc_config())
     }

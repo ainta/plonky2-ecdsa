@@ -136,17 +136,14 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderCurve<F, D>
 
     fn curve_double<C: Curve>(&mut self, p: &AffinePointTarget<C>) -> AffinePointTarget<C> {
         let AffinePointTarget { x, y } = p;
-        let double_y = self.add_nonnative(y, y);
+        let double_y = self.add_nonnative_range_check_optional(y, y, false);
         let inv_double_y = self.inv_nonnative(&double_y);
         let x_squared = self.mul_nonnative(x, x);
-        let double_x_squared = self.add_nonnative(&x_squared, &x_squared);
-        let triple_x_squared = self.add_nonnative(&double_x_squared, &x_squared);
-
         let a = self.constant_nonnative(C::A);
-        let triple_xx_a = self.add_nonnative(&triple_x_squared, &a);
+        let triple_xx_a = self.add_many_nonnative_range_check_optional(&[x_squared.clone(), x_squared.clone(), x_squared, a], false);
         let lambda = self.mul_nonnative(&triple_xx_a, &inv_double_y);
         let lambda_squared = self.mul_nonnative(&lambda, &lambda);
-        let x_double = self.add_nonnative(x, x);
+        let x_double = self.add_nonnative_range_check_optional(x, x, false);
 
         let x3 = self.sub_nonnative(&lambda_squared, &x_double);
 
@@ -185,7 +182,7 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderCurve<F, D>
         let v_inv = self.inv_nonnative(&v);
         let s = self.mul_nonnative(&u, &v_inv);
         let s_squared = self.mul_nonnative(&s, &s);
-        let x_sum = self.add_nonnative(x2, x1);
+        let x_sum = self.add_nonnative_range_check_optional(x2, x1, false);
         let x3 = self.sub_nonnative(&s_squared, &x_sum);
         let x_diff = self.sub_nonnative(x1, &x3);
         let prod = self.mul_nonnative(&s, &x_diff);
@@ -425,7 +422,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_curve_mul() -> Result<()> {
         const D: usize = 2;
         type C = PoseidonGoldilocksConfig;
@@ -458,7 +454,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_curve_random() -> Result<()> {
         const D: usize = 2;
         type C = PoseidonGoldilocksConfig;
