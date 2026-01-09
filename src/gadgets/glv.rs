@@ -2,6 +2,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use anyhow::Result;
 use core::marker::PhantomData;
+use num::integer::div_ceil;
 use plonky2::plonk::circuit_data::CommonCircuitData;
 use plonky2::util::serialization::{Buffer, IoResult, Read, Write};
 
@@ -20,7 +21,7 @@ use crate::curve::secp256k1::Secp256K1;
 use crate::gadgets::biguint::{GeneratedValuesBigUint, WitnessBigUint};
 use crate::gadgets::curve::{AffinePointTarget, CircuitBuilderCurve};
 use crate::gadgets::curve_msm::curve_msm_circuit;
-use crate::gadgets::nonnative::{CircuitBuilderNonNative, NonNativeTarget};
+use crate::gadgets::nonnative::{CircuitBuilderNonNative, NonNativeTarget, BITS};
 
 pub trait CircuitBuilderGlv<F: RichField + Extendable<D>, const D: usize> {
     fn secp256k1_glv_beta(&mut self) -> NonNativeTarget<Secp256K1Base>;
@@ -58,8 +59,8 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderGlv<F, D>
         BoolTarget,
         BoolTarget,
     ) {
-        let k1 = self.add_virtual_nonnative_target_sized::<Secp256K1Scalar>(4);
-        let k2 = self.add_virtual_nonnative_target_sized::<Secp256K1Scalar>(4);
+        let k1 = self.add_virtual_nonnative_target_sized::<Secp256K1Scalar>(div_ceil(128, BITS));
+        let k2 = self.add_virtual_nonnative_target_sized::<Secp256K1Scalar>(div_ceil(128, BITS));
         let k1_neg = self.add_virtual_bool_target_unsafe();
         let k2_neg = self.add_virtual_bool_target_unsafe();
 
@@ -73,11 +74,11 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderGlv<F, D>
         });
 
         // Check that `k1_raw + GLV_S * k2_raw == k`.
-        let k1_raw = self.nonnative_conditional_neg(&k1, k1_neg);
-        let k2_raw = self.nonnative_conditional_neg(&k2, k2_neg);
+        let k1_raw = self.nonnative_conditional_neg(&k1, k1_neg, false);
+        let k2_raw = self.nonnative_conditional_neg(&k2, k2_neg, false);
         let s = self.constant_nonnative(GLV_S);
-        let mut should_be_k = self.mul_nonnative(&s, &k2_raw);
-        should_be_k = self.add_nonnative(&should_be_k, &k1_raw);
+        let mut should_be_k = self.mul_nonnative(&s, &k2_raw, false);
+        should_be_k = self.add_nonnative(&should_be_k, &k1_raw, true);
         self.connect_nonnative(&should_be_k, k);
 
         (k1, k2, k1_neg, k2_neg)
@@ -91,7 +92,7 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderGlv<F, D>
         let (k1, k2, k1_neg, k2_neg) = self.decompose_secp256k1_scalar(k);
 
         let beta = self.secp256k1_glv_beta();
-        let beta_px = self.mul_nonnative(&beta, &p.x);
+        let beta_px = self.mul_nonnative(&beta, &p.x, true);
         let sp = AffinePointTarget::<Secp256K1> {
             x: beta_px,
             y: p.y.clone(),
@@ -134,7 +135,6 @@ impl<F: RichField + Extendable<D>, const D: usize> SimpleGenerator<F, D>
         );
 
         let (k1, k2, k1_neg, k2_neg) = decompose_secp256k1_scalar(k);
-
         out_buffer.set_biguint_target(&self.k1.value, &k1.to_canonical_biguint())?;
         out_buffer.set_biguint_target(&self.k2.value, &k2.to_canonical_biguint())?;
         out_buffer.set_bool_target(self.k1_neg, k1_neg)?;
@@ -188,7 +188,6 @@ mod tests {
     use crate::gadgets::nonnative::CircuitBuilderNonNative;
 
     #[test]
-    #[ignore]
     fn test_glv_gadget() -> Result<()> {
         const D: usize = 2;
         type C = PoseidonGoldilocksConfig;

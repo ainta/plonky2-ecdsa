@@ -1,7 +1,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
-
+use num::integer::div_ceil;
 use num::BigUint;
 use plonky2::field::extension::Extendable;
 use plonky2::field::types::{Field, Sample};
@@ -10,12 +10,12 @@ use plonky2::hash::keccak::KeccakHash;
 use plonky2::iop::target::{BoolTarget, Target};
 use plonky2::plonk::circuit_builder::CircuitBuilder;
 use plonky2::plonk::config::{GenericHashOut, Hasher};
-use plonky2_u32::gadgets::arithmetic_u32::{CircuitBuilderU32, U32Target};
+use plonky2_ux::gadgets::arithmetic_ux::{CircuitBuilderUX, UXTarget};
 
 use crate::curve::curve_types::{Curve, CurveScalar};
 use crate::gadgets::biguint::BigUintTarget;
 use crate::gadgets::curve::{AffinePointTarget, CircuitBuilderCurve};
-use crate::gadgets::nonnative::{CircuitBuilderNonNative, NonNativeTarget};
+use crate::gadgets::nonnative::{CircuitBuilderNonNative, NonNativeTarget, BITS};
 use crate::gadgets::split_nonnative::CircuitBuilderSplit;
 
 const WINDOW_SIZE: usize = 4;
@@ -43,6 +43,7 @@ pub trait CircuitBuilderWindowedMul<F: RichField + Extendable<D>, const D: usize
         &mut self,
         p: &AffinePointTarget<C>,
         n: &NonNativeTarget<C::ScalarField>,
+        range_check: bool,
     ) -> AffinePointTarget<C>;
 }
 
@@ -62,10 +63,10 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderWindowedMul<F, 
 
         let mut multiples = vec![self.constant_affine_point(g)];
         for i in 1..1 << WINDOW_SIZE {
-            multiples.push(self.curve_add(p, &multiples[i - 1]));
+            multiples.push(self.curve_add(p, &multiples[i - 1], true));
         }
         for i in 1..1 << WINDOW_SIZE {
-            multiples[i] = self.curve_add(&neg, &multiples[i]);
+            multiples[i] = self.curve_add(&neg, &multiples[i], true);
         }
         multiples
     }
@@ -75,8 +76,8 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderWindowedMul<F, 
         access_index: Target,
         v: Vec<AffinePointTarget<C>>,
     ) -> AffinePointTarget<C> {
-        let num_limbs = C::BaseField::BITS / 32;
-        let zero = self.zero_u32();
+        let num_limbs = div_ceil(C::BaseField::BITS, BITS);
+        let zero = self.zero_ux();
         let x_limbs: Vec<Vec<_>> = (0..num_limbs)
             .map(|i| {
                 v.iter()
@@ -94,11 +95,11 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderWindowedMul<F, 
 
         let selected_x_limbs: Vec<_> = x_limbs
             .iter()
-            .map(|limbs| U32Target(self.random_access(access_index, limbs.clone())))
+            .map(|limbs| UXTarget(self.random_access(access_index, limbs.clone())))
             .collect();
         let selected_y_limbs: Vec<_> = y_limbs
             .iter()
-            .map(|limbs| U32Target(self.random_access(access_index, limbs.clone())))
+            .map(|limbs| UXTarget(self.random_access(access_index, limbs.clone())))
             .collect();
 
         let x = NonNativeTarget {
@@ -122,8 +123,8 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderWindowedMul<F, 
         p1: &AffinePointTarget<C>,
         p2: &AffinePointTarget<C>,
     ) -> AffinePointTarget<C> {
-        let new_x = self.if_nonnative(b, &p1.x, &p2.x);
-        let new_y = self.if_nonnative(b, &p1.y, &p2.y);
+        let new_x = self.if_nonnative(b, &p1.x, &p2.x, true);
+        let new_y = self.if_nonnative(b, &p1.y, &p2.y, true);
         AffinePointTarget { x: new_x, y: new_y }
     }
 
@@ -131,15 +132,19 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderWindowedMul<F, 
         &mut self,
         p: &AffinePointTarget<C>,
         n: &NonNativeTarget<C::ScalarField>,
+        range_check: bool,
     ) -> AffinePointTarget<C> {
+        let windows = self.split_nonnative_to_4_bit_limbs(n);
+
         let hash_0 = KeccakHash::<25>::hash_no_pad(&[F::ZERO]);
         let hash_0_scalar = C::ScalarField::from_noncanonical_biguint(BigUint::from_bytes_le(
             &GenericHashOut::<F>::to_bytes(&hash_0),
         ));
         let starting_point = CurveScalar(hash_0_scalar) * C::GENERATOR_PROJECTIVE;
+
         let starting_point_multiplied = {
             let mut cur = starting_point;
-            for _ in 0..C::ScalarField::BITS {
+            for _ in 0..(windows.len() * 4) {
                 cur = cur.double();
             }
             cur
@@ -150,20 +155,19 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderWindowedMul<F, 
         let precomputation = self.precompute_window(p);
         let zero = self.zero();
 
-        let windows = self.split_nonnative_to_4_bit_limbs(n);
         for i in (0..windows.len()).rev() {
-            result = self.curve_repeated_double(&result, WINDOW_SIZE);
+            result = self.curve_repeated_double(&result, WINDOW_SIZE, false);
             let window = windows[i];
 
             let to_add = self.random_access_curve_points(window, precomputation.clone());
             let is_zero = self.is_equal(window, zero);
             let should_add = self.not(is_zero);
-            result = self.curve_conditional_add(&result, &to_add, should_add);
+            result = self.curve_conditional_add(&result, &to_add, should_add, false);
         }
 
         let to_subtract = self.constant_affine_point(starting_point_multiplied.to_affine());
-        let to_add = self.curve_neg(&to_subtract);
-        result = self.curve_add(&result, &to_add);
+        let to_add = self.curve_neg(&to_subtract, false);
+        result = self.curve_add(&result, &to_add, range_check);
 
         result
     }
@@ -211,7 +215,6 @@ mod tests {
         let selected = builder.random_access_curve_points(access_index_target, points.clone());
         let expected = points[access_index].clone();
         builder.connect_affine_point(&selected, &expected);
-
         let data = builder.build::<C>();
         let proof = data.prove(pw).unwrap();
 
@@ -219,7 +222,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_curve_windowed_mul() -> Result<()> {
         const D: usize = 2;
         type C = PoseidonGoldilocksConfig;
@@ -241,7 +243,8 @@ mod tests {
 
         let g_target = builder.constant_affine_point(g);
         let neg_five_target = builder.constant_nonnative(neg_five);
-        let neg_five_g_actual = builder.curve_scalar_mul_windowed(&g_target, &neg_five_target);
+        let neg_five_g_actual =
+            builder.curve_scalar_mul_windowed(&g_target, &neg_five_target, true);
         builder.curve_assert_valid(&neg_five_g_actual);
 
         builder.connect_affine_point(&neg_five_g_expected, &neg_five_g_actual);
